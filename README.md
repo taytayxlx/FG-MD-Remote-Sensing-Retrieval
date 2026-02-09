@@ -1,7 +1,7 @@
 # FG-MD-Remote-Sensing-Retrieval
 
 FG-MD: Frequency-Guided Mutual Distillation Network
-This is the official PyTorch implementation of the paper: "Learning Spatial-Semantic Consistency: A Frequency-Guided Mutual Distillation Framework for Remote Sensing Retrieval." 
+This is the official PyTorch implementation of the paper: "Frequency-Guided Mutual Distillation for Lightweight Cross-Modal Remote Sensing Image Retrieval." 
 
 Code Availability Note: The  pre-processing scripts for the VAIS dataset are currently available. The complete source code, including full training pipelines and pre-trained weights for all benchmarks, will be fully released upon the formal acceptance of the paper.
 

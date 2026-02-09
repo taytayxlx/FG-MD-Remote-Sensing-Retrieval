@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 
 # Custom modules (Ensure these .py files are in the same directory)
 from network_base import AlexNetFc
-from testvais import test_MAP, eval_val_dataset, VAISTestDataset
+from test_vais import test_MAP, eval_val_dataset, VAISTestDataset
 from meters import loss_store_init, print_loss, remark_loss, reset_loss
 from Loss import AFD_semantic, AFD_spatial
 

@@ -26,7 +26,7 @@ MRSSID: The primary benchmark for MS-PAN retrieval.
 
 VAIS: Visible-Infrared ship retrieval benchmark. Download: https://pan.baidu.com/s/15Rdv-_UJOGsAXeFb-8EgZw?pwd=q8yr (Password: q8yr)
 
-Note on Reproducibility: While some works claim ~99% mAP on VAIS, those results are often non-open-source. We provide a verifiable baseline with an mAP of ~0.78 (at 24 bits) to ensure academic transparency.
+To ensure a rigorous evaluation, the official training and testing split provided by the VAIS dataset is adopted, and identical hyperparameter configurations from the MRSSID experiments are maintained. This extension serves to verify the robustness of the model against substantial modality gaps between thermal and optical spectra under consistent experimental constraints.
 
 
 IGS: Our self-constructed benchmark for indoor UAV reconnaissance.

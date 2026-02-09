@@ -8,7 +8,8 @@ Code Availability Note: The  pre-processing scripts for the VAIS dataset are cur
 FG-MD is a lightweight and efficient framework for Cross-Modal Remote Sensing Image Retrieval (CMRSIR). By integrating frequency-domain perception and a symmetric mutual distillation strategy, it achieves state-of-the-art performance (0.8654 mAP on MRSSID) with only ~22M parameters, offering an optimal efficiency-accuracy trade-off for edge-device deployment.
 
 Core Features
-<img width="2133" height="1291" alt="image" src="https://github.com/user-attachments/assets/6e8c0268-cecb-4c7d-b370-26263d60e5b3" />
+<img width="2019" height="1221" alt="image" src="https://github.com/user-attachments/assets/d803785c-cc5d-43eb-9bbc-46fd00e66576" />
+
 
 
 Frequency-Domain Full-Spectrum Perceiver (FDFSP): Utilizes Fast Fourier Transform (FFT) to recover high-frequency structural details (e.g., edges and textures) typically lost during downsampling. 

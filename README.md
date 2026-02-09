@@ -7,7 +7,7 @@ Code Availability Note: The core model architecture and pre-processing scripts f
 
 FG-MD is a lightweight and efficient framework for Cross-Modal Remote Sensing Image Retrieval (CMRSIR). By integrating frequency-domain perception and a symmetric mutual distillation strategy, it achieves state-of-the-art performance (0.8654 mAP on MRSSID) with only ~22M parameters, offering an optimal efficiency-accuracy trade-off for edge-device deployment.
 
-🌟 Core Features
+Core Features
 
 Frequency-Domain Full-Spectrum Perceiver (FDFSP): Utilizes Fast Fourier Transform (FFT) to recover high-frequency structural details (e.g., edges and textures) typically lost during downsampling. 
 
@@ -17,9 +17,7 @@ Dual-Attention Mutual Distillation (DAMD): A symmetric collaborative learning st
 
 Edge-Ready Performance: Based on a MobileNetV2 backbone, achieving real-time inference (48.6 FPS) on embedded platforms like NVIDIA Jetson NX.
 
-🚀 Quick Start
-
-1. Data Preparation
+Data Preparation
 
 MRSSID: The primary benchmark for MS-PAN retrieval. 
 

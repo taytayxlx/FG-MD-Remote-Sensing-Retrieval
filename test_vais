@@ -1,0 +1,292 @@
+# -*- coding: utf-8 -*-
+"""
+Evaluation and Utility Script for VAIS Dataset Cross-Modal Retrieval.
+This script provides functionalities for data loading, hash code extraction, 
+and mean Average Precision (mAP) calculation.
+"""
+
+import os
+import argparse
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
+from PIL import Image
+from network import FG_MD
+
+# ==============================================================================
+# 1. Dataset Class Definition
+# ==============================================================================
+
+class VAISTestDataset(Dataset):
+    """Dataset loader for VAIS evaluation.
+    
+    Supports both 3-column (RGB, IR, Label) and 2-column (Path, Label) txt formats.
+    """
+    def __init__(self, txt_path, root_dir, mode='RGB', transform=None):
+        """
+        Args:
+            txt_path (str): Path to the txt metadata file.
+            root_dir (str): Root directory containing images.
+            mode (str): Modality to load ('RGB' or 'IR').
+            transform (callable, optional): Transformations to apply to images.
+        """
+        self.root_dir = root_dir
+        self.transform = transform
+        self.mode = mode.upper()
+        self.lines = []
+
+        if not os.path.exists(txt_path):
+            print(f"[Error] File not found: {txt_path}")
+        else:
+            with open(txt_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    self.lines.append(parts)
+            print(f"[{self.mode}] Successfully loaded {len(self.lines)} image entries.")
+
+    def __len__(self):
+        return len(self.lines)
+
+    def __getitem__(self, idx):
+        parts = self.lines[idx]
+        
+        # Intelligent format parsing
+        if len(parts) >= 3:
+            # 3-column format: [RGB_Path, IR_Path, Label]
+            rel_path = parts[0] if self.mode == 'RGB' else parts[1]
+            label = int(parts[2])
+        elif len(parts) == 2:
+            # 2-column format: [Path, Label]
+            rel_path = parts[0]
+            label = int(parts[1])
+        else:
+            print(f"[Warning] Invalid format at line {idx}: {parts}")
+            return torch.zeros(3, 224, 224), 0, idx
+
+        img_path = os.path.join(self.root_dir, rel_path)
+        
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            # Fallback for missing images
+            img = Image.new('RGB', (224, 224), (0, 0, 0))
+
+        if self.transform is not None:
+            img = self.transform(img)
+            
+        return img, label, idx
+
+# ==============================================================================
+# 2. Evaluation Utilities (Hash Extraction & mAP)
+# ==============================================================================
+
+def predict_hash_code(model, data_loader, gpu_id=0):
+    """Extracts features and labels from a given model and dataloader.
+    
+    Returns:
+        tuple: (numpy.ndarray of outputs, numpy.ndarray of labels)
+    """
+    model.eval()
+    is_start = True
+    all_output = []
+    all_label = []
+    
+    with torch.no_grad():
+        for i, (inputs, label, _) in enumerate(data_loader):
+            inputs = inputs.cuda(gpu_id)
+            
+            # Model returns: (hash_features, aux_outputs)
+            output, _ = model(inputs) 
+            
+            output = output.data.cpu().numpy()
+            label = label.numpy()
+            
+            if is_start:
+                all_output = output
+                all_label = label
+                is_start = False
+            else:
+                all_output = np.concatenate((all_output, output), axis=0)
+                all_label = np.concatenate((all_label, label), axis=0)
+    
+    return np.array(all_output), np.array(all_label)
+
+def calc_hamming_dist(B1, B2):
+    """Calculates Hamming distance between two binary hash matrices.
+    
+    Args:
+        B1, B2: Binary codes in {-1, 1}.
+    """
+    q = B2.shape[1]
+    distH = 0.5 * (q - np.dot(B1, B2.transpose()))
+    return distH
+
+def calc_map(qB, rB, query_label, retrieval_label):
+    """Calculates Mean Average Precision (mAP).
+    
+    Args:
+        qB: Query binary codes.
+        rB: Retrieval (database) binary codes.
+        query_label: One-hot labels for queries.
+        retrieval_label: One-hot labels for database.
+    """
+    qB = np.sign(qB)
+    rB = np.sign(rB)
+    
+    num_query = query_label.shape[0]
+    map_score = 0
+    
+    for iter in range(num_query):
+        # Calculate ground truth matches
+        gnd = (np.dot(query_label[iter, :].reshape(1, -1), retrieval_label.transpose()) > 0).astype(np.float32)
+        tsum = np.sum(gnd)
+        if tsum == 0:
+            continue
+            
+        # Sort by Hamming distance
+        hamm = calc_hamming_dist(qB[iter, :].reshape(1, -1), rB)
+        ind = np.argsort(hamm)[0] 
+        
+        gnd = gnd[0, ind]
+        count = np.linspace(1, tsum, int(tsum))
+        tindex = np.asarray(np.where(gnd == 1)) + 1.0
+        map_score += np.mean(count / tindex)
+        
+    return map_score / num_query
+
+def compute_mAP(trn_binary, tst_binary, trn_label, tst_label):
+    """Wrapper to handle label conversion and mAP calculation."""
+    if len(tst_label.shape) == 1:
+        classes = int(np.max(trn_label) + 1)
+        trn_label_onehot = np.eye(classes)[trn_label]
+        tst_label_onehot = np.eye(classes)[tst_label]
+    else:
+        trn_label_onehot = trn_label
+        tst_label_onehot = tst_label
+        
+    return calc_map(tst_binary, trn_binary, tst_label_onehot, trn_label_onehot)
+
+# ==============================================================================
+# 3. Training & Validation Hooks
+# ==============================================================================
+
+def test_MAP(model_test, model_database, test_loader, database_loader, args):
+    """Interface for train_vais.py to perform evaluation during training."""
+    db_hash, db_labels = predict_hash_code(model_database, database_loader)
+    test_hash, test_labels = predict_hash_code(model_test, test_loader)
+    
+    map_score = compute_mAP(db_hash, test_hash, db_labels, test_labels)
+    return map_score, test_hash, db_hash, test_labels, db_labels
+
+def eval_val_dataset(epoch, model_rgb, model_ir, db_dataset_rgb, db_dataset_ir,
+                     val_dataset_rgb, val_dataset_ir, srcname_list, args, best_MAP, eval_interval=10):
+    """Performs cross-modal evaluation and saves the best model."""
+    if epoch % eval_interval == 0 or epoch == (args.max_epoch - 1):
+        print(f'>> Evaluation at epoch {epoch} ...')
+        
+        mapval_list = []
+        model_list = [model_rgb, model_ir] 
+        db_dataset_list = [db_dataset_rgb, db_dataset_ir]
+        val_dataset_list = [val_dataset_rgb, val_dataset_ir]
+        
+        for src1_idx in range(len(srcname_list)):
+            val_loader = DataLoader(val_dataset_list[src1_idx], batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+            val_model = model_list[src1_idx]
+            
+            for src2_idx in range(len(srcname_list)):
+                if src1_idx == src2_idx:
+                    continue # Cross-modal only
+                
+                db_loader = DataLoader(db_dataset_list[src2_idx], batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+                db_model = model_list[src2_idx]
+                
+                task_name = f"{srcname_list[src1_idx]}2{srcname_list[src2_idx]}"
+                cur_map, _, _, _, _ = test_MAP(val_model, db_model, val_loader, db_loader, args)
+                
+                mapval_list.append((task_name, cur_map))
+                print(f"  {task_name}: {cur_map:.4f}")
+
+        avg_map = sum([one[1] for one in mapval_list]) / len(mapval_list)
+        print(f'  Average MAP: {avg_map:.4f} (Previous Best: {best_MAP:.4f})')
+
+        if avg_map > best_MAP:
+            best_MAP = avg_map
+            for idx, srcname in enumerate(srcname_list):
+                save_path = f"{args.model_path}_{srcname}.pth"
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                torch.save(model_list[idx], save_path)
+            print(f'  >>> New Best Model Saved!')
+
+    return best_MAP
+
+# ==============================================================================
+# 4. Main Execution
+# ==============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluation Script for VAIS Cross-Modal Hashing")
+    parser.add_argument('--hash_bit', type=int, default=24, help='Length of hash codes')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for inference')
+    parser.add_argument('--root_dir', type=str, default='data/VAIS/', help='Root directory for images')
+    parser.add_argument('--test_txt', type=str, default='data/VAIS/test.txt', help='Path to metadata txt')
+    parser.add_argument('--model_path', type=str, required=True, help='Path prefix for loaded models')
+    parser.add_argument('--workers', type=int, default=4, help='Dataloader workers')
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Executing on device: {device}")
+
+    # Data Preprocessing
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transform_test = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    # Loading Datasets
+    print(">>> Loading VAIS Test Datasets...")
+    loader_rgb = DataLoader(VAISTestDataset(args.test_txt, args.root_dir, 'RGB', transform_test), 
+                            batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+    loader_ir = DataLoader(VAISTestDataset(args.test_txt, args.root_dir, 'IR', transform_test), 
+                           batch_size=args.batch_size, shuffle=False, num_workers=args.workers)
+
+    # Loading Pre-trained Models
+    def load_model(suffix):
+        path = f"{args.model_path}_{suffix}"
+        if not os.path.exists(path):
+            path += '.pth'
+        print(f">>> Loading {suffix} model: {path}")
+        model = torch.load(path, map_location=device)
+        model.eval()
+        return model
+
+    model_rgb = load_model('RGB')
+    model_ir = load_model('IR')
+
+    # Hash Code Extraction
+    print(">>> Extracting features...")
+    code_rgb, label_rgb = predict_hash_code(model_rgb, loader_rgb)
+    code_ir, label_ir = predict_hash_code(model_ir, loader_ir)
+
+    # Task Evaluation
+    tasks = [
+        ("RGB -> IR", code_rgb, label_rgb, code_ir, label_ir),
+        ("IR -> RGB", code_ir, label_ir, code_rgb, label_rgb)
+    ]
+
+    for title, q_code, q_label, db_code, db_label in tasks:
+        print(f"\n{'='*45}\nTask: {title} (Bits: {args.hash_bit})\n{'='*45}")
+        mAP = compute_mAP(db_code, q_code, db_label, q_label)
+        print(f">> Mean Average Precision (mAP): {mAP:.4f}")
+
+    print("\nEvaluation Complete.")
+
+if __name__ == '__main__':
+    main()
